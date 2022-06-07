@@ -51,23 +51,22 @@ if [ ! -f $INSTALL_FILE ] ; then
       if ! $AUR_HELPER -Q python-rocker &> /dev/null ; then
         $AUR_HELPER -S --noconfirm --needed python-rocker
       fi
-
-      # setup docker
-      ## run docker daemon now and on the next startups 
-      sudo systemctl --now enable docker
-
-      ## docker without root
-      if ! id -nG | grep -qw "docker" ; then
-        sudo usermod -aG docker $USER
-        exec sudo su $USER -s "$ROOT_PATH/install"
-      fi
-
-      ### clone and build dockerfile
-      pwd
-      git clone "$DOCKER_URL" --branch "$DOCKER_BRANCH" "$DOCKER_PATH"
-      docker build docker -t "$DOCKER_PATH"
-      ;;
   esac
+
+  # setup docker
+  ## run docker daemon now and on the next startups 
+  sudo systemctl --now enable docker
+
+  ## docker without root
+  if ! id -nG | grep -qw "docker" ; then
+    sudo usermod -aG docker $USER
+    exec sudo su $USER -s "$ROOT_PATH/install"
+  fi
+
+  ## clone and build dockerfile
+  git clone "$DOCKER_URL" --branch "$DOCKER_BRANCH" "$DOCKER_PATH"
+  docker build docker -t "$DOCKER_PATH"
+  ;;
 
   # setup ros2ws
   mkdir -p "$ROS2WS_PATH"
@@ -163,6 +162,6 @@ cd -
 export CURRENT_LOG_PATH="$LOGS_PATH/$(date +"%F_%T")"
 mkdir -p "$CURRENT_LOG_PATH"
 
-bash -c "(cd $NS3_SERVICE_PATH/ns-3.35 && ./waf --run 'proto-cocosim --log_all')&>$CURRENT_LOG_PATH/ns-3.log &\
+bash -c "(cd $NS3_SERVICE_PATH/ns-3.35 && ./waf --run 'proto-cocosim --log_all') &>$CURRENT_LOG_PATH/ns-3.log &\
          (source "$ROS2WS_PATH/install/setup.$SHELL_NAME" && ros2 launch box_bot_gazebo_example gazebo_and_spawn_box_bots_launch.py) &>$CURRENT_LOG_PATH/ros.log  &\
          wait"
