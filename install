@@ -175,14 +175,6 @@ if [ "$DOCKER" = "true" -a ! -f /.dockerenv ]; then
   exit 0
 fi
 
-# build ros2ws
-[ -f "/opt/ros/foxy/setup.$SHELL_NAME" ] && source "/opt/ros/foxy/setup.$SHELL_NAME"
-cd "$ROS2WS_PATH"
-rosdep install -i --from-path src --rosdistro foxy -y
-rosdep update
-colcon build --symlink-install --cmake-args -DBUILD_TESTING=0 -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cd - > /dev/null
-
 # build cocosim gazebo plugin
 cd "$COCOSIM_GAZEBO_PLUGIN_PATH/build"
 cmake ..
@@ -195,8 +187,6 @@ cd "$MODIFIED_CYCLONEDDS_PATH/build"
 cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX=/usr/local ..
 sudo cmake --build . --target install
 cd - > /dev/null
-export CYCLONEDDS_URI="file://$CYCLONEDDS_CONFIG_PATH/nomulticast_v3.xml"
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 # build ns3 as a service
 cd "$NS3_SERVICE_PATH/ns-3.35"
@@ -204,7 +194,18 @@ cd "$NS3_SERVICE_PATH/ns-3.35"
 ./waf
 cd - > /dev/null
 
+# build ros2ws
+[ -f "/opt/ros/foxy/setup.$SHELL_NAME" ] && source "/opt/ros/foxy/setup.$SHELL_NAME"
+cd "$ROS2WS_PATH"
+rosdep install -i --from-path src --rosdistro foxy -y
+rosdep update
+colcon build --symlink-install --cmake-args -DBUILD_TESTING=0 -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cd - > /dev/null
+
 # execute
+export CYCLONEDDS_URI="file://$CYCLONEDDS_CONFIG_PATH/nomulticast_v3.xml"
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
 export CURRENT_LOG_PATH="$LOGS_PATH/$(date +"%F_%T")"
 mkdir -p "$CURRENT_LOG_PATH"
 
