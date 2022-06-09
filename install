@@ -1,9 +1,26 @@
 #! /usr/bin/env bash
 
+function arch_install() {
+  if ! $AUR_HELPER -Q "$1" &> /dev/null ; then
+    $AUR_HELPER -S --noconfirm --needed "$1" 
+  fi
+}
+
+# function ubuntu_install() {
+#   if ! dpkg -s "$1" &>/dev/null ; then
+#     sudo apt install -y "$1" 
+#   fi
+# }
+
+########
+# main #
+########
+
 # Trace the execution of the script (debug)
 if [[ "${DEBUG}" =~ ^1|yes|true$ ]]; then
     set -o xtrace     
 fi
+
 # error control
 set -o errexit  # Exit on most errors
 set -o pipefail # Use last non-zero exit code in a pipeline
@@ -20,53 +37,75 @@ COCOSIM_CYCLONEDDS_PATH="cocosim_cyclonedds"
 COCOSIM_GAZEBO_PLUGIN_PATH="cocosim_gazebo_plugin"
 NS3_SERVICE_PATH="ns3_service"
 CYCLONEDDS_CONFIG_PATH="$COCOSIM_CYCLONEDDS_PATH/config/cyclonedds"
-SHELL_NAME="bash" #"$(basename "$(echo $SHELL)")"
+SHELL_NAME="bash"
 
-# external config
+if lspci | grep 'VGA.*NVIDIA' 1> /dev/null ; then
+  NVIDIA="true";
+else
+  NVIDIA="false";
+fi
+
+# external config (can override internal config)
 source "$ROOT_PATH/config"
+
+# validate
+DISTRO="$(lsb_release -i | sed 's/.*:\s*//g')" #  
+if [ "$DISTRO" != "Arch" -a "$DISTRO" != "Ubuntu" ] ; then
+  printf "Error: %s is not supported\n" "$DISTRO"
+fi
+
+if [ "$DISTRO" = "Arch" -a "$DOCKER" != "true" ] ; then
+  DOCKER="true"
+  printf "Warning: Forcing \`DOCKER=true\` as this is the only supported mode\n"
+fi
+
 
 # sudo cache
 sudo -v
 
-# install 
-distro="$(lsb_release -i | sed 's/.*:\s*//g')"
+############
+# commands #
+############
+
+# install/update (clone/pull) (all native)
 if [ ! -f $INSTALL_FILE ] ; then
-  case "$distro" in
+  case "$DISTRO" in
     Ubuntu)
-      # instalar todas las deps (sacar del dockerfile)
-      ## cycloneDDS deps
-      sudo apt install maven default-jdk
+      if [ $DOCKER = "true" ] ; then
+        printf "docker\n"
+      else
+        printf "native\n"
+      fi
       ;;
     Arch)
-      # intall docker
-      if ! $AUR_HELPER -Q docker &> /dev/null ; then
-        $AUR_HELPER -S --noconfirm --needed docker
+      # install docker
+      arch_install python-rocker 
+
+      # indtall nvidia-docker  
+      if [ "$NVIDIA" = "true" ] ; then
+        arch_install nvidia-docker
       fi
 
-      # intall rocker 
-      if [ "$NVIDIA" = "true" ] && ! $AUR_HELPER -Q nvidia-docker &> /dev/null ; then
-        $AUR_HELPER -S --noconfirm --needed nvidia-docker 
-      fi
-
-      if ! $AUR_HELPER -Q python-rocker &> /dev/null ; then
-        $AUR_HELPER -S --noconfirm --needed python-rocker
-      fi
+      # indtall python-rocker 
+      arch_install python-rocker 
+      ;;
   esac
 
-  # setup docker
-  ## run docker daemon now and on the next startups 
-  sudo systemctl --now enable docker
+  if [ $DOCKER = "true" ] ; then
+    # setup docker
+    ## run docker daemon now and on the next startups 
+    sudo systemctl --now enable docker
 
-  ## docker without root
-  if ! id -nG | grep -qw "docker" ; then
-    sudo usermod -aG docker $USER
-    exec sudo su $USER -s "$ROOT_PATH/install"
+    ## docker without root
+    if ! id -nG | grep -qw "docker" ; then
+      sudo usermod -aG docker $USER
+      exec sudo su $USER -s "$ROOT_PATH/install"
+    fi
+
+    ## clone and build dockerfile
+    git clone "$DOCKER_URL" --branch "$DOCKER_BRANCH" "$DOCKER_PATH"
+    docker build "$DOCKER_PATH" -t cocosim
   fi
-
-  ## clone and build dockerfile
-  git clone "$DOCKER_URL" --branch "$DOCKER_BRANCH" "$DOCKER_PATH"
-  docker build docker -t "$DOCKER_PATH"
-  ;;
 
   # setup ros2ws
   mkdir -p "$ROS2WS_PATH"
@@ -108,8 +147,7 @@ if [ ! -f $INSTALL_FILE ] ; then
   echo "$VERSION" > "$INSTALL_FILE" 
 fi
 
-
-# if docker is enabled enforce its use
+# if docker is enabled enforce its use (before build or execute)
 if [ "$DOCKER" = "true" -a ! -f /.dockerenv ]; then
 
   # docker without root (TODO improve)
@@ -118,50 +156,66 @@ if [ "$DOCKER" = "true" -a ! -f /.dockerenv ]; then
     exec sudo su $USER -s "$ROOT_PATH/install"
   fi
 
-  printf -- "Run this same script inside rocker. To run rocker execute:\n  rocker "
+  # set docker_cmd
   if [ "$NVIDIA" = "true" ] ; then
-    printf -- "--nvidia "
+    graphics_flag="--nvidia"
   else
-    printf -- "--devices /dev/dri/card0"
-    TERM='xterm-256color' rocker --devices /dev/dri/card0 --x11 --user --home cocosim
+    graphics_flag="--devices /dev/dri/card0"
   fi
-  printf -- "--x11 --user --home cocosim\n"
+  docker_cmd="rocker $graphics_flag --x11 --user --home cocosim"
+
+  # interact
+  printf "Docker is enabled, run this script inside docker.\nTo start docker execute:\n TERM='xterm-256color' $docker_cmd\n"
+  printf "Execute it now automatically?[Y/n]:"
+  read awns
+
+  if [ "$awns" != "n" -a "$awns" != "N" ] ; then
+    TERM='xterm-256color' $docker_cmd
+  fi
   exit 0
 fi
 
-# install/update ros2ws
+# build ros2ws
 [ -f "/opt/ros/foxy/setup.$SHELL_NAME" ] && source "/opt/ros/foxy/setup.$SHELL_NAME"
 cd "$ROS2WS_PATH"
 rosdep install -i --from-path src --rosdistro foxy -y
 rosdep update
-colcon build --symlink-install --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo
+colcon build --symlink-install --cmake-args -DBUILD_TESTING=0 -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cd - > /dev/null
 
-# install/update cocosim gazebo plugin
+# build cocosim gazebo plugin
 cd "$COCOSIM_GAZEBO_PLUGIN_PATH/build"
 cmake ..
 make
-cd -
+cd - > /dev/null
 export GAZEBO_PLUGIN_PATH="${GAZEBO_PLUGIN_PATH}:$COCOSIM_GAZEBO_PLUGIN_PATH/build"
 
-# install/update cycloneDDS
+# build cycloneDDS
 cd "$MODIFIED_CYCLONEDDS_PATH/build"
 cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX=/usr/local ..
 sudo cmake --build . --target install
-cd -
+cd - > /dev/null
 export CYCLONEDDS_URI="file://$CYCLONEDDS_CONFIG_PATH/nomulticast_v3.xml"
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
-# intalar ns3 as a service
+# build ns3 as a service
 cd "$NS3_SERVICE_PATH/ns-3.35"
 ./waf configure --enable-examples
 ./waf
-cd -
+cd - > /dev/null
 
 # execute
 export CURRENT_LOG_PATH="$LOGS_PATH/$(date +"%F_%T")"
 mkdir -p "$CURRENT_LOG_PATH"
 
-bash -c "(cd $NS3_SERVICE_PATH/ns-3.35 && ./waf --run 'proto-cocosim --log_all') &>$CURRENT_LOG_PATH/ns-3.log &\
-         (source "$ROS2WS_PATH/install/setup.$SHELL_NAME" && ros2 launch box_bot_gazebo_example gazebo_and_spawn_box_bots_launch.py) &>$CURRENT_LOG_PATH/ros.log  &\
-         wait"
+bash -c "\
+(\
+  (cd $NS3_SERVICE_PATH/ns-3.35 && ./waf --run 'proto-cocosim --log_all') &>$CURRENT_LOG_PATH/ns-3.log ;\
+  echo 'ns3 exited' \
+) &\
+(\
+  source "$ROS2WS_PATH/install/setup.$SHELL_NAME" &&\
+  ros2 launch box_bot_gazebo_example gazebo_and_spawn_box_bots_launch.py &>$CURRENT_LOG_PATH/ros.log ;\
+  echo 'ros exited'\
+) &\
+wait"

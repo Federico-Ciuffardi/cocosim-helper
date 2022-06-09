@@ -44,7 +44,6 @@ NS3_SERVICE_URL="https://gitlab.fing.edu.uy/fvelazquez/proto-ns3-service"
 NS3_SERVICE_BRANCH="main"
 
 # misc
-DOCKER="true" # capaz mejor hacer `lspci|grep nvidia`
-NVIDIA="false" # capaz mejor hacer `lspci|grep nvidia`
+DOCKER="true" 
 AUR_HELPER="yay"
 # DEBUG="logs" # [logs, gdb, valgind]
