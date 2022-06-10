@@ -1,0 +1,378 @@
+#! /usr/bin/env bash
+
+EXE_NAME="ccsh"
+
+NAME="CoCoSim Helper"
+
+VERSION="0.0.0"
+
+HELP_MSG="$NAME $VERSION
+
+Usage: $EXE_NAME [<flags>] [<command>]
+
+Flags:
+  -v, --version     Output version information and exit
+  -h, --help        Display this help and exit
+
+Commands:
+  deps              Install dependencies
+  pull              Clone/Pull all the CoCoSim related projects from git
+  build             Build all the CoCoSim related projects from git
+  run               Run CoCoSim
+"
+
+#################
+# Aux functions #
+#################
+
+function arch_install() {
+  if ! $AUR_HELPER -Q "$1" &> /dev/null ; then
+    $AUR_HELPER -S --noconfirm --needed "$1" 
+  fi
+}
+
+function ubuntu_install() {
+  if ! dpkg -s "$1" &>/dev/null ; then
+    sudo apt install -y "$1" 
+  fi
+}
+
+function git_update() {
+  path="${!#}"
+  if [ -e $path ] ; then
+    printf "${path##/}: "
+    git -C $path pull
+  else
+    git clone $@
+  fi
+}
+
+# if docker is enabled enforce its use (before build or run)
+function force_docker(){
+  # docker without root
+  if ! id -nG | grep -qw "docker" ; then
+    sudo usermod -aG docker $USER
+    exec sudo su $USER -s "$ROOT_PATH/$EXE_NAME" $ORIGINAL_ARGS
+  fi
+
+  # set docker_cmd
+  if [ "$NVIDIA" = "true" ] ; then
+    graphics_flag="--nvidia"
+  else
+    graphics_flag="--devices /dev/dri/card0"
+  fi
+  docker_cmd="rocker $graphics_flag --x11 --user --home cocosim"
+
+  # interact
+  printf "Docker is enabled, run this script inside docker.\nTo start docker execute:\n TERM='xterm-256color' $docker_cmd\n"
+  printf "Execute it now automatically?[Y/n]:"
+  read awns
+
+  if [ "$awns" != "n" -a "$awns" != "N" ] ; then
+    TERM='xterm-256color' $docker_cmd
+  fi
+  exit 0
+}
+
+############
+# commands #
+############
+function deps(){
+  # cache sudo
+  sudo -v
+
+  case "$DISTRO" in
+    Ubuntu)
+      if [ $DOCKER = "true" ] ; then
+        printf "Manually install docker, nvidia-docker and python-rocker\n"
+        printf "Proceed? [y/N]:"
+        read awns
+        if [ "$awns" != "y" -a "$awns" != "Y" ] ; then
+          exit 0
+        fi
+      else
+        # ros2 foxy
+        if ! dpkg -s "ros-foxy-desktop" &>/dev/null ; then
+          sudo apt update -y
+
+          ubuntu_install software-properties-common
+          sudo add-apt-repository universe
+
+          ubuntu_install curl 
+          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key  -o /usr/share/keyrings/ros-archive-keyring.gpg
+
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(source /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+
+          sudo apt update -y 
+          sudo apt upgrade -y
+          ubuntu_install ros-foxy-desktop
+        fi
+
+        # colcon
+        ubuntu_install python3-colcon-common-extensions
+
+        #gazebo
+        ubuntu_install gazebo11
+        ubuntu_install ros-foxy-gazebo-ros-pkgs 
+
+        # CycloneDDS deps
+        ubuntu_install maven 
+        ubuntu_install default-jdk
+
+        # Build deps
+        ubuntu_install libsdl1.2debian
+        ubuntu_install ros-foxy-osrf-testing-tools-cpp
+        ubuntu_install ros-foxy-performance-test-fixture
+
+        # Debug deps
+        ubuntu_install xterm
+        ubuntu_install gdb
+        ubuntu_install valgrind
+      fi
+      ;;
+    Arch)
+      # install docker
+      arch_install docker
+
+      # indtall nvidia-docker  
+      if [ "$NVIDIA" = "true" ] ; then
+        arch_install nvidia-docker
+      fi
+
+      # indtall python-rocker 
+      arch_install python-rocker 
+      ;;
+    *) 
+      printf "Unsuported distro %s" "$DISTRO"
+      exit 1
+      ;;
+  esac
+
+  if [ $DOCKER = "true" ] ; then
+    # setup docker
+    ## run docker daemon now and on the next startups 
+    sudo systemctl --now enable docker
+  fi
+
+  touch .deps
+}
+
+# clone/pull
+function pull(){
+  if [ $DOCKER = "true" ] ; then
+    ## clone cocosim dockerfile
+    git_update "$DOCKER_URL" --branch "$DOCKER_BRANCH" "$DOCKER_PATH"
+  fi
+
+  # setup ros2ws
+  mkdir -p "$ROS2WS_PATH"
+  ## examples
+  ### clone boxbot pingpong example
+  git_update "$EXAMPLES_URL" --branch "$EXAMPLES_BRANCH" "$ROS2WS_PATH/src/example"
+
+  ## lauch
+  ### clone launch
+  git_update "$LAUNCH_URL" --branch "$LAUNCH_BRANCH" "$ROS2WS_PATH/src/launch"
+  ### clone modified launch_ros
+  git_update "$MODIFIED_LAUNCH_ROS_URL" --branch "$MODIFIED_LAUNCH_ROS_BRANCH" "$ROS2WS_PATH/src/launch_ros"
+  ## rwm
+  ### clone rwm
+  git_update "$RWM_URL" --branch "$ROS_DISTRO" "$ROS2WS_PATH/src/rwm"
+  ### clone rwm_dds_common
+  git_update "$RWM_DDS_COMMON_URL" --branch "$RWM_DDS_COMMON_BRANCH" "$ROS2WS_PATH/src/rmw_dds_common"
+  ### clone modified rwm_dds_common
+  git_update "$MODIFIED_RMW_CYCLONEDDS_URL" --branch "$MODIFIED_RMW_CYCLONEDDS_BRANCH" "$ROS2WS_PATH/src/rmw_cyclonedds"
+
+  # modified cycloneDDS
+  ## clone modified cycloneDDS
+  git_update "$MODIFIED_CYCLONEDDS_URL" --branch "$MODIFIED_CYCLONEDDS_BRANCH" "$MODIFIED_CYCLONEDDS_PATH"
+  mkdir -p "$MODIFIED_CYCLONEDDS_PATH/build"
+
+  ## clone other cycloneDDS related data (config)
+  git_update "$COCOSIM_CYCLONEDDS_URL" --branch "$COCOSIM_CYCLONEDDS_BRANCH" "$COCOSIM_CYCLONEDDS_PATH"
+
+  # cocosim gazebo plugin 
+  ## clone cocosim gazebo plugin 
+  git_update "$COCOSIM_GAZEBO_PLUGIN_URL" --branch "$COCOSIM_GAZEBO_PLUGIN_BRANCH" "$COCOSIM_GAZEBO_PLUGIN_PATH"
+  mkdir -p "$COCOSIM_GAZEBO_PLUGIN_PATH/build"
+
+  # ns-3 as a service
+  ## clone ns-3 as a service
+  git_update "$NS3_SERVICE_URL" --branch "$NS3_SERVICE_BRANCH" "$NS3_SERVICE_PATH"
+
+  # end
+  touch .pull
+}
+
+# build cocosim gazebo plugin
+function build(){
+  # cache sudo
+  sudo -v
+
+  if [ $DOCKER = "true" -a  ! -f /.dockerenv ] ; then
+    docker build "$DOCKER_PATH" -t cocosim
+    force_docker
+  fi
+
+  cd "$COCOSIM_GAZEBO_PLUGIN_PATH/build"
+  cmake ..
+  make
+  cd - > /dev/null
+
+  # build cycloneDDS
+  cd "$MODIFIED_CYCLONEDDS_PATH/build"
+  cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX=/usr/local ..
+  sudo cmake --build . --target install
+  cd - > /dev/null
+
+  # build ns3 as a service
+  cd "$NS3_SERVICE_PATH/ns-3.35"
+  ./waf configure --enable-examples
+  ./waf
+  cd - > /dev/null
+
+  # build ros2ws
+  [ -f "/opt/ros/foxy/setup.$SHELL_NAME" ] && source "/opt/ros/foxy/setup.$SHELL_NAME"
+  cd "$ROS2WS_PATH"
+  colcon build --symlink-install --cmake-args -DBUILD_TESTING=0 -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo
+  cd - > /dev/null
+
+  touch .build
+}
+
+# run 
+function run(){
+  if [ $DOCKER = "true" ] ; then 
+    if [ ! -f /.dockerenv ] ; then
+      force_docker
+    fi
+
+    # install cycloneDDS
+    cd "$MODIFIED_CYCLONEDDS_PATH/build"
+    sudo make install > /dev/null
+    cd - > /dev/null
+  fi
+
+  # setup env
+  [ -f "/opt/ros/foxy/setup.$SHELL_NAME" ] && source "/opt/ros/foxy/setup.$SHELL_NAME"
+  export CYCLONEDDS_URI="file://$CYCLONEDDS_CONFIG_PATH/nomulticast_v3.xml"
+  export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+  export GAZEBO_PLUGIN_PATH="${GAZEBO_PLUGIN_PATH}:$COCOSIM_GAZEBO_PLUGIN_PATH/build"
+
+  # log 
+  CURRENT_LOG_PATH="$LOGS_PATH/$(date +"%F_%T")"
+  mkdir -p "$CURRENT_LOG_PATH"
+  FULL_CURRENT_LOG_PATH="$(realpath "$LOGS_PATH/$(date +"%F_%T")")"
+  ln -sfn "$FULL_CURRENT_LOG_PATH" "$LOGS_PATH/latest"
+  printf "\nStarting execution, logs inside of \"$FULL_CURRENT_LOG_PATH\""
+
+  # run
+  bash -c "\
+  (\
+    (cd $NS3_SERVICE_PATH/ns-3.35 && ./waf --run 'proto-cocosim --log_all') &>$CURRENT_LOG_PATH/ns-3.log ;\
+    printf '\nns3 exited\n' \
+  ) &\
+  (\
+    source "$ROS2WS_PATH/install/setup.$SHELL_NAME" &&\
+    ros2 launch box_bot_gazebo_example gazebo_and_spawn_box_bots_launch.py &>$CURRENT_LOG_PATH/ros.log ;\
+    echo 'ros exited'\
+  ) &\
+  wait"
+}
+
+########
+# main #
+########
+
+ORIGINAL_ARGS=$@
+
+# Trace the execution of the script (debug)
+if [[ "${DEBUG}" =~ ^1|yes|true$ ]]; then
+    set -o xtrace     
+fi
+
+# error control
+set -o errexit  # Exit on most errors
+set -o pipefail # Use last non-zero exit code in a pipeline
+set -o errtrace # Ensure the error trap handler is inherited
+
+# default config
+ROS2WS_PATH="ros2ws"
+DOCKER_PATH="docker"
+MODIFIED_CYCLONEDDS_PATH="cyclonedds"
+COCOSIM_CYCLONEDDS_PATH="cocosim_cyclonedds"
+COCOSIM_GAZEBO_PLUGIN_PATH="cocosim_gazebo_plugin"
+NS3_SERVICE_PATH="ns3_service"
+CYCLONEDDS_CONFIG_PATH="$COCOSIM_CYCLONEDDS_PATH/config/cyclonedds"
+ROOT_PATH="$( cd -- "$( dirname -- "${BASH_SOURCE[0]:-$0}"; )" &> /dev/null && pwd 2> /dev/null; )";
+
+if lspci | grep 'VGA.*NVIDIA' 1> /dev/null ; then
+  NVIDIA="true";
+else
+  NVIDIA="false";
+fi
+
+# external config (can override default config)
+source "$ROOT_PATH/config"
+
+# internal config (do not allow modifying in external config)
+ROOT_PATH="$( cd -- "$( dirname -- "${BASH_SOURCE[0]:-$0}"; )" &> /dev/null && pwd 2> /dev/null; )";
+SHELL_NAME="bash"
+DISTRO="$(lsb_release -i | sed 's/.*:\s*//g')" #  
+
+# validate
+if [ "$DISTRO" != "Arch" -a "$DISTRO" != "Ubuntu" ] ; then
+  printf "Error: %s is not supported\n" "$DISTRO"
+fi
+
+if [ "$DISTRO" = "Arch" -a "$DOCKER" != "true" ] ; then
+  DOCKER="true"
+  printf "Warning: Forcing \`DOCKER=true\` as this is the only supported mode\n"
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      echo "$HELP_MSG"
+      exit 0
+      ;;
+    -v|--version)
+      echo "$NAME $VERSION"
+      exit 0
+      ;;
+    -*)
+      echo "'$1' is not a $EXE_NAME flag. See '$EXE_NAME --help'."
+      exit 2
+      ;;
+    deps)
+      deps
+      exit $?
+      ;;
+    pull)
+      [ -f .deps ] || deps
+      pull
+      build # TODO solo hacer build si cambia algo
+      exit $?
+      ;;
+    build)
+      [ -f .deps ] || deps
+      [ -f .pull ] || pull
+      build
+      exit $?
+      ;;
+    run)
+      [ -f .deps ]    || deps
+      [ -f .pull ]    || pull
+      [ -f .build ]   || build
+      run
+      exit $?
+      ;;
+    *)
+      echo "'$1' is not a $EXE_NAME command. See '$EXE_NAME --help'."
+      exit 2
+      ;;
+  esac
+done
+
+printf "missing command\nTry '$EXE_NAME --help' for more information.\n"
+exit 1

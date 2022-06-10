@@ -1,0 +1,3 @@
+# deps
+* pciutils
+* lsb-release
