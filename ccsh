@@ -21,6 +21,73 @@ Commands:
   run               Run CoCoSim
 "
 
+function default_config() {
+  DOCKER="false" 
+  # DEBUG="logs" # [logs, gdb, valgind]
+
+  # versions
+  ROS_DISTRO="foxy"
+
+  # paths
+  ROS2WS_PATH="ros2ws"
+  DOCKER_PATH="docker"
+  MODIFIED_CYCLONEDDS_PATH="cyclonedds"
+  COCOSIM_CYCLONEDDS_PATH="cocosim_cyclonedds"
+  COCOSIM_GAZEBO_PLUGIN_PATH="cocosim_gazebo_plugin"
+  NS3_SERVICE_PATH="ns3_service"
+  CYCLONEDDS_CONFIG_PATH="$COCOSIM_CYCLONEDDS_PATH/config/cyclonedds"
+
+  # paths
+  LOGS_PATH="logs"
+
+  # git 
+  DOCKER_URL="https://github.com/Federico-Ciuffardi/docker-cocosim"
+  DOCKER_BRANCH="master"
+
+  EXAMPLES_URL="git@gitlab.fing.edu.uy:cocosim/code/ejemplos"
+  EXAMPLES_BRANCH="master"
+
+  LAUNCH_URL="https://github.com/ros2/launch.git"
+  LAUNCH_BRANCH="$ROS_DISTRO"
+
+  MODIFIED_LAUNCH_ROS_URL="https://github.com/Federico-Ciuffardi/launch_ros.git"
+  MODIFIED_LAUNCH_ROS_BRANCH="cocosim-$ROS_DISTRO"
+
+  RWM_URL="https://github.com/ros2/rmw.git"
+  RWM_BRANCH="$ROS_DISTRO"
+
+  RWM_DDS_COMMON_URL="https://github.com/ros2/rmw_dds_common.git"
+  RWM_DDS_COMMON_BRANCH="$ROS_DISTRO"
+
+  MODIFIED_RMW_CYCLONEDDS_URL="https://github.com/Federico-Ciuffardi/rmw_cyclonedds.git"
+  MODIFIED_RMW_CYCLONEDDS_BRANCH="cocosim-$ROS_DISTRO"
+
+  MODIFIED_CYCLONEDDS_URL="https://github.com/Federico-Ciuffardi/cyclonedds.git"
+  MODIFIED_CYCLONEDDS_BRANCH="cocosim-0.7.0"
+
+  COCOSIM_CYCLONEDDS_URL="git@gitlab.fing.edu.uy:cocosim/code/cocosim-cyclonedds"
+  COCOSIM_CYCLONEDDS_BRANCH="master"
+
+  COCOSIM_GAZEBO_PLUGIN_URL="git@gitlab.fing.edu.uy:cocosim/code/cocosim-gazebo-plugin"
+  COCOSIM_GAZEBO_PLUGIN_BRANCH="master"
+
+  COCOSIM_GAZEBO_PLUGIN_URL="git@gitlab.fing.edu.uy:cocosim/code/cocosim-gazebo-plugin"
+  COCOSIM_GAZEBO_PLUGIN_BRANCH="master"
+
+  NS3_SERVICE_URL="https://gitlab.fing.edu.uy/fvelazquez/proto-ns3-service"
+  NS3_SERVICE_BRANCH="main"
+
+  # misc
+  AUR_HELPER="yay"
+
+  if lspci | grep 'VGA.*NVIDIA' 1> /dev/null ; then
+    NVIDIA="true";
+  else
+    NVIDIA="false";
+  fi
+
+}
+
 #################
 # Aux functions #
 #################
@@ -52,7 +119,7 @@ function force_docker(){
   # docker without root
   if ! id -nG | grep -qw "docker" ; then
     sudo usermod -aG docker $USER
-    exec sudo su $USER -s "$ROOT_PATH/$EXE_NAME" $ORIGINAL_ARGS
+    exec sudo su $USER -s "$SCRIPT_PATH/$EXE_NAME" $ORIGINAL_ARGS
   fi
 
   # set docker_cmd
@@ -297,26 +364,14 @@ set -o pipefail # Use last non-zero exit code in a pipeline
 set -o errtrace # Ensure the error trap handler is inherited
 
 # default config
-ROS2WS_PATH="ros2ws"
-DOCKER_PATH="docker"
-MODIFIED_CYCLONEDDS_PATH="cyclonedds"
-COCOSIM_CYCLONEDDS_PATH="cocosim_cyclonedds"
-COCOSIM_GAZEBO_PLUGIN_PATH="cocosim_gazebo_plugin"
-NS3_SERVICE_PATH="ns3_service"
-CYCLONEDDS_CONFIG_PATH="$COCOSIM_CYCLONEDDS_PATH/config/cyclonedds"
-ROOT_PATH="$( cd -- "$( dirname -- "${BASH_SOURCE[0]:-$0}"; )" &> /dev/null && pwd 2> /dev/null; )";
-
-if lspci | grep 'VGA.*NVIDIA' 1> /dev/null ; then
-  NVIDIA="true";
-else
-  NVIDIA="false";
-fi
+default_config
 
 # external config (can override default config)
-source "$ROOT_PATH/config"
+SCRIPT_PATH="$( cd -- "$( dirname -- "${BASH_SOURCE[0]:-$0}"; )" &> /dev/null && pwd 2> /dev/null; )";
+[ ! -f "$SCRIPT_PATH/config" ] || source "$SCRIPT_PATH/config"
 
 # internal config (do not allow modifying in external config)
-ROOT_PATH="$( cd -- "$( dirname -- "${BASH_SOURCE[0]:-$0}"; )" &> /dev/null && pwd 2> /dev/null; )";
+SCRIPT_PATH="$( cd -- "$( dirname -- "${BASH_SOURCE[0]:-$0}"; )" &> /dev/null && pwd 2> /dev/null; )";
 SHELL_NAME="bash"
 DISTRO="$(lsb_release -i | sed 's/.*:\s*//g')" #  
 
@@ -351,7 +406,6 @@ while [ $# -gt 0 ]; do
     pull)
       [ -f .deps ] || deps
       pull
-      build # TODO solo hacer build si cambia algo
       exit $?
       ;;
     build)
