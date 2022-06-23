@@ -13,17 +13,19 @@ Usage: $EXE_NAME [<flags>] [<command>]
 Flags:
   -v, --version     Output version information and exit
   -h, --help        Display this help and exit
+  -d, --debug       Used by the run command, set to 'none' 'gdb' or 'valgrind'
+                    to use that tool for debugging
 
 Commands:
   deps              Install dependencies
   pull              Clone/Pull all the CoCoSim related projects from git
-  build             Build all the CoCoSim related projects from git
-  run               Run CoCoSim
+  build             Build all the CoCoSim related projects
+  run               Run a CoCoSim example
 "
 
 function default_config() {
   # debug mode
-  CCSH_ROS_DEBUG="gdb" # possible values: "logs" (default), "gdb" or "valgind"
+  CCSH_ROS_DEBUG="none"
 
   # Use docker
   DOCKER="false" 
@@ -82,12 +84,6 @@ function default_config() {
 
   # misc
   AUR_HELPER="yay"
-
-  if lspci | grep 'VGA.*NVIDIA' 1> /dev/null ; then
-    NVIDIA="true";
-  else
-    NVIDIA="false";
-  fi
 }
 
 #################
@@ -377,6 +373,11 @@ CCSH_PATH="$( cd -- "$( dirname -- "${BASH_SOURCE[0]:-$0}"; )" &> /dev/null && p
 CCSH_PATH="$( cd -- "$( dirname -- "${BASH_SOURCE[0]:-$0}"; )" &> /dev/null && pwd 2> /dev/null; )";
 SHELL_NAME="bash"
 DISTRO="$(lsb_release -i | sed 's/.*:\s*//g')" #  
+if lspci | grep 'VGA.*NVIDIA' 1> /dev/null ; then
+  NVIDIA="true";
+else
+  NVIDIA="false";
+fi
 
 # export some config values
 export CCSH_ROS_DEBUG
@@ -396,6 +397,8 @@ if [ "$DOCKER" != "true" ] ; then
   fi
 fi
 
+cmd="none"
+
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)
@@ -406,38 +409,60 @@ while [ $# -gt 0 ]; do
       echo "$NAME $VERSION"
       exit 0
       ;;
+    -d|--debug)
+      shift
+      CCSH_ROS_DEBUG="$1"
+      shift
+      ;;
     -*)
-      echo "'$1' is not a $EXE_NAME flag. See '$EXE_NAME --help'."
+      echo "ERROR: '$1' is not a $EXE_NAME flag. See '$EXE_NAME --help'."
       exit 2
       ;;
-    deps)
-      deps
-      exit $?
-      ;;
-    pull)
-      [ -f .deps ] || deps
-      pull
-      exit $?
-      ;;
-    build)
-      [ -f .deps ] || deps
-      [ -f .pull ] || pull
-      build
-      exit $?
-      ;;
-    run)
-      [ -f .deps ]    || deps
-      [ -f .pull ]    || pull
-      [ -f .build ]   || build
-      run
-      exit $?
+    deps|pull|build|run)
+      if [ "$cmd" = "none" ] ; then
+        cmd="$1"
+      else
+        echo "ERROR: Use only one command. Detected at least two: '$cmd' and '$1'"
+        exit 2
+      fi
+      shift
       ;;
     *)
-      echo "'$1' is not a $EXE_NAME command. See '$EXE_NAME --help'."
+      echo "ERROR: '$1' is not a $EXE_NAME command. See '$EXE_NAME --help'."
       exit 2
       ;;
   esac
 done
 
-printf "missing command\nTry '$EXE_NAME --help' for more information.\n"
-exit 1
+if [[ "$CCSH_ROS_DEBUG" != @(valgrind|gdb|none) ]]; then
+  echo "ERROR: Invalid debug value, choose one from: 'none' 'valgrind' 'gdb'" >&2 
+  exit 2
+fi
+
+case "$cmd" in
+  deps)
+    deps
+    exit $?
+    ;;
+  pull)
+    [ -f .deps ] || deps
+    pull
+    exit $?
+    ;;
+  build)
+    [ -f .deps ] || deps
+    [ -f .pull ] || pull
+    build
+    exit $?
+    ;;
+  run)
+    [ -f .deps ]    || deps
+    [ -f .pull ]    || pull
+    [ -f .build ]   || build
+    run
+    exit $?
+    ;;
+  *) printf "missing command\nTry '$EXE_NAME --help' for more information.\n"
+     exit 1
+     ;;
+ esac

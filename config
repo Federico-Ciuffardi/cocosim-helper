@@ -1,0 +1,1 @@
+DOCKER="false" # set to "true" to use the docker, and to "false" to not use it
