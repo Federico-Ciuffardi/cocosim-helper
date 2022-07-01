@@ -8,24 +8,45 @@ VERSION="0.0.0"
 
 HELP_MSG="$NAME $VERSION
 
-Usage: $EXE_NAME [<flags>] [<command>]
+Usage: $EXE_NAME [<flags>] [<command>] [<command-flags>]
 
 Flags:
   -v, --version     Output version information and exit
   -h, --help        Display this help and exit
-  -d, --debug       Used by the run command, set to 'none' 'gdb' or 'valgrind'
-                    to use that tool for debugging
 
 Commands:
   deps              Install dependencies
   pull              Clone/Pull all the CoCoSim related projects from git
   build             Build all the CoCoSim related projects
   run               Run a CoCoSim example
+
+
+Command flags:
+  -h, --help        Display command specific help
+  ...
+"
+
+RUN_HELP_MSG="$NAME $VERSION run command
+
+Usage: $EXE_NAME run [<command-flags>] [example]
+
+Command flags:
+  -h, --help        Display this help and exit
+  -d, --debug       Used by the run command, set to 'none' 'gdb' or 'valgrind'
+                    to use that tool for debugging
+  -n, --nococosim   If used it will run the example without CoCoSim
+
+examples:
+  ping              Default
+  coverage
 "
 
 function default_config() {
   # debug mode
   CCSH_ROS_DEBUG="none"
+
+  # debug mode
+  NOCOCOSIM="false"
 
   # Use docker
   DOCKER="false" 
@@ -117,7 +138,7 @@ function force_docker(){
   # docker without root
   if ! id -nG | grep -qw "docker" ; then
     sudo usermod -aG docker $USER
-    exec sudo su $USER -s "$CCSH_PATH/$EXE_NAME" $ORIGINAL_ARGS
+    exec sudo su $USER -s "$SCRIPT_PATH/$EXE_NAME" $ORIGINAL_ARGS
   fi
 
   # set docker_cmd
@@ -307,6 +328,44 @@ function build(){
 
 # run 
 function run(){
+  PACKAGE="box_bot_gazebo_example"
+  LAUNCH="gazebo_and_spawn_box_bots_launch.py"
+  CCSH_EXAMPLE="ping"
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help)
+        echo "$RUN_HELP_MSG"
+        exit 0
+        ;;
+      -n|--nococosim)
+        NOCOCOSIM=true
+        shift
+        ;;
+      -d|--debug)
+        shift
+        CCSH_ROS_DEBUG="$1"
+        if [[ "$CCSH_ROS_DEBUG" != @(valgrind|gdb|none) ]]; then
+          echo "ERROR: Invalid debug value, choose one from: 'none' 'valgrind' 'gdb'" >&2 
+          exit 2
+        fi
+        shift
+        ;;
+      *) 
+        case $1 in
+          ping|coverage)
+            CCSH_EXAMPLE=$1
+            ;;
+          *)
+            echo "$1 is not a valid example"
+            exit 2
+            ;;
+        esac
+        shift
+        ;;
+    esac
+  done
+
   if [ $DOCKER = "true" ] ; then 
     if [ ! -f /.dockerenv ] ; then
       force_docker
@@ -318,12 +377,6 @@ function run(){
     cd - > /dev/null
   fi
 
-  # setup env
-  [ -f "/opt/ros/foxy/setup.$SHELL_NAME" ] && source "/opt/ros/foxy/setup.$SHELL_NAME"
-  export CYCLONEDDS_URI="file://$CYCLONEDDS_CONFIG_PATH/nomulticast_v3.xml"
-  export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-  export GAZEBO_PLUGIN_PATH="${GAZEBO_PLUGIN_PATH}:$COCOSIM_GAZEBO_PLUGIN_PATH/build"
-
   # log 
   CURRENT_LOG_PATH="$LOGS_PATH/$(date +"%F_%T")"
   mkdir -p "$CURRENT_LOG_PATH"
@@ -331,19 +384,34 @@ function run(){
   ln -sfn "$FULL_CURRENT_LOG_PATH" "$LOGS_PATH/latest"
   printf "\nStarting execution, logs inside of \"$FULL_CURRENT_LOG_PATH\""
 
+  # export
   export CCSH_CURRENT_LOG_PATH="$CURRENT_LOG_PATH"
+  export CCSH_ROS_DEBUG
+  export CCSH_EXAMPLE
+
   # run
-  bash -c "\
-  (\
-    (cd $NS3_SERVICE_PATH/ns-3.35 && ./waf --run 'proto-cocosim --log_all') &>$CURRENT_LOG_PATH/ns-3.log ;\
-    printf '\nns3 exited\n' \
-  ) &\
-  (\
-    source "$ROS2WS_PATH/install/setup.$SHELL_NAME" &&\
-    ros2 launch box_bot_gazebo_example gazebo_and_spawn_box_bots_launch.py &>$CURRENT_LOG_PATH/ros.log ;\
-    echo 'ros exited'\
-  ) &\
-  wait"
+  [ -f "/opt/ros/foxy/setup.$SHELL_NAME" ] && source "/opt/ros/foxy/setup.$SHELL_NAME"
+
+  if [ "$NOCOCOSIM" = "true" ] ; then
+    source "$ROS2WS_PATH/install/setup.$SHELL_NAME" 
+    ros2 launch $PACKAGE $LAUNCH &>$CURRENT_LOG_PATH/ros.log
+    echo 'ros exited'
+  else
+    export CYCLONEDDS_URI="file://$CYCLONEDDS_CONFIG_PATH/nomulticast_v3.xml"
+    export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    export GAZEBO_PLUGIN_PATH="${GAZEBO_PLUGIN_PATH}:$COCOSIM_GAZEBO_PLUGIN_PATH/build"
+    bash -c "\
+    (\
+      (cd $NS3_SERVICE_PATH/ns-3.35 && ./waf --run 'proto-cocosim --log_all') &>$CURRENT_LOG_PATH/ns-3.log ;\
+      printf '\nns3 exited\n' \
+    ) &\
+    (\
+      source "$ROS2WS_PATH/install/setup.$SHELL_NAME" &&\
+      ros2 launch $PACKAGE $LAUNCH &>$CURRENT_LOG_PATH/ros.log ;\
+      echo 'ros exited'\
+    ) &\
+    wait"
+  fi
 }
 
 ########
@@ -366,11 +434,11 @@ set -o errtrace # Ensure the error trap handler is inherited
 default_config
 
 # external config (can override default config)
-CCSH_PATH="$( cd -- "$( dirname -- "${BASH_SOURCE[0]:-$0}"; )" &> /dev/null && pwd 2> /dev/null; )";
-[ ! -f "$CCSH_PATH/config" ] || source "$CCSH_PATH/config"
+SCRIPT_PATH="$( cd -- "$( dirname -- "${BASH_SOURCE[0]:-$0}"; )" &> /dev/null && pwd 2> /dev/null; )";
+[ ! -f "$SCRIPT_PATH/config" ] || source "$SCRIPT_PATH/config"
 
 # internal config (do not allow modifying in external config)
-CCSH_PATH="$( cd -- "$( dirname -- "${BASH_SOURCE[0]:-$0}"; )" &> /dev/null && pwd 2> /dev/null; )";
+SCRIPT_PATH="$( cd -- "$( dirname -- "${BASH_SOURCE[0]:-$0}"; )" &> /dev/null && pwd 2> /dev/null; )";
 SHELL_NAME="bash"
 DISTRO="$(lsb_release -i | sed 's/.*:\s*//g')" #  
 if lspci | grep 'VGA.*NVIDIA' 1> /dev/null ; then
@@ -378,9 +446,6 @@ if lspci | grep 'VGA.*NVIDIA' 1> /dev/null ; then
 else
   NVIDIA="false";
 fi
-
-# export some config values
-export CCSH_ROS_DEBUG
 
 # validate
 if [ "$DISTRO" != "Arch" -a "$DISTRO" != "Ubuntu" ] ; then
@@ -409,23 +474,35 @@ while [ $# -gt 0 ]; do
       echo "$NAME $VERSION"
       exit 0
       ;;
-    -d|--debug)
-      shift
-      CCSH_ROS_DEBUG="$1"
-      shift
-      ;;
     -*)
       echo "ERROR: '$1' is not a $EXE_NAME flag. See '$EXE_NAME --help'."
       exit 2
       ;;
-    deps|pull|build|run)
-      if [ "$cmd" = "none" ] ; then
-        cmd="$1"
-      else
-        echo "ERROR: Use only one command. Detected at least two: '$cmd' and '$1'"
-        exit 2
-      fi
+    deps)
       shift
+      deps $@
+      exit $?
+      ;;
+    pull)
+      shift
+      [ -f .deps ] || deps
+      pull $@
+      exit $?
+      ;;
+    build)
+      shift
+      [ -f .deps ] || deps
+      [ -f .pull ] || pull
+      build $@
+      exit $?
+      ;;
+    run)
+      shift
+      [ -f .deps ]    || deps
+      [ -f .pull ]    || pull
+      [ -f .build ]   || build
+      run $@
+      exit $?
       ;;
     *)
       echo "ERROR: '$1' is not a $EXE_NAME command. See '$EXE_NAME --help'."
@@ -434,35 +511,4 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [[ "$CCSH_ROS_DEBUG" != @(valgrind|gdb|none) ]]; then
-  echo "ERROR: Invalid debug value, choose one from: 'none' 'valgrind' 'gdb'" >&2 
-  exit 2
-fi
-
-case "$cmd" in
-  deps)
-    deps
-    exit $?
-    ;;
-  pull)
-    [ -f .deps ] || deps
-    pull
-    exit $?
-    ;;
-  build)
-    [ -f .deps ] || deps
-    [ -f .pull ] || pull
-    build
-    exit $?
-    ;;
-  run)
-    [ -f .deps ]    || deps
-    [ -f .pull ]    || pull
-    [ -f .build ]   || build
-    run
-    exit $?
-    ;;
-  *) printf "missing command\nTry '$EXE_NAME --help' for more information.\n"
-     exit 1
-     ;;
- esac
+printf "missing command\nTry '$EXE_NAME --help' for more information.\n"
