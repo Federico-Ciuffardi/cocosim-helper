@@ -46,7 +46,7 @@ function default_config() {
   CCSH_ROS_DEBUG="none"
 
   # debug mode
-  NOCOCOSIM="false"
+  CCSH_NOCOCOSIM="false"
 
   # Use docker
   DOCKER="false" 
@@ -339,7 +339,7 @@ function run(){
         exit 0
         ;;
       -n|--nococosim)
-        NOCOCOSIM=true
+        CCSH_NOCOCOSIM=true
         shift
         ;;
       -d|--debug)
@@ -388,17 +388,18 @@ function run(){
   export CCSH_CURRENT_LOG_PATH="$CURRENT_LOG_PATH"
   export CCSH_ROS_DEBUG
   export CCSH_EXAMPLE
+  export CCSH_NOCOCOSIM
 
   # run
   [ -f "/opt/ros/foxy/setup.$SHELL_NAME" ] && source "/opt/ros/foxy/setup.$SHELL_NAME"
+  export CYCLONEDDS_URI="file://$CYCLONEDDS_CONFIG_PATH/nomulticast_v3.xml"
+  export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
-  if [ "$NOCOCOSIM" = "true" ] ; then
+  if [ "$CCSH_NOCOCOSIM" = "true" ] ; then
     source "$ROS2WS_PATH/install/setup.$SHELL_NAME" 
     ros2 launch $PACKAGE $LAUNCH &>$CURRENT_LOG_PATH/ros.log
     echo 'ros exited'
   else
-    export CYCLONEDDS_URI="file://$CYCLONEDDS_CONFIG_PATH/nomulticast_v3.xml"
-    export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
     export GAZEBO_PLUGIN_PATH="${GAZEBO_PLUGIN_PATH}:$COCOSIM_GAZEBO_PLUGIN_PATH/build"
     bash -c "\
     (\
