@@ -305,16 +305,21 @@ function build(){
   make
   cd - > /dev/null
 
-  # build cycloneDDS
-  cd "$MODIFIED_CYCLONEDDS_PATH/build"
-  cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX=/usr/local ..
-  sudo cmake --build . --target install
-  cd - > /dev/null
-
   # build ns3 as a service
   cd "$NS3_SERVICE_PATH/ns-3.35"
   ./waf configure --enable-examples
   ./waf
+  cd - > /dev/null
+  ## [[installs]]
+  cd "$NS3_SERVICE_PATH/shared"
+  sudo make install
+  cd - > /dev/null
+
+  # build cycloneDDS
+  cd "$MODIFIED_CYCLONEDDS_PATH/build"
+  cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX=/usr/local ..
+  ## [[installs]]
+  sudo cmake --build . --target install
   cd - > /dev/null
 
   # build ros2ws
@@ -370,6 +375,11 @@ function run(){
     if [ ! -f /.dockerenv ] ; then
       force_docker
     fi
+
+    # install ns3_service shared
+    cd "$NS3_SERVICE_PATH/shared"
+    sudo make install > /dev/null
+    cd - > /dev/null
 
     # install cycloneDDS
     cd "$MODIFIED_CYCLONEDDS_PATH/build"
