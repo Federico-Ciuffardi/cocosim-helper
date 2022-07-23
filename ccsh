@@ -411,6 +411,7 @@ function run(){
     echo 'ros exited'
   else
     export GAZEBO_PLUGIN_PATH="${GAZEBO_PLUGIN_PATH}:$COCOSIM_GAZEBO_PLUGIN_PATH/build"
+    trap ' ' INT
     bash -c "\
     (\
       (cd $NS3_SERVICE_PATH/ns-3.35 && ./waf --run 'proto-cocosim --log_all') &>$CURRENT_LOG_PATH/ns-3.log ;\
@@ -421,7 +422,8 @@ function run(){
       ros2 launch $PACKAGE $LAUNCH &>$CURRENT_LOG_PATH/ros.log ;\
       echo 'ros exited'\
     ) &\
-    wait"
+    wait" || true
+    mv "$NS3_SERVICE_PATH"/ns-3.35/proto-cocosim*.pcap $CURRENT_LOG_PATH
   fi
 }
 
