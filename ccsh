@@ -42,11 +42,10 @@ examples:
 "
 
 function default_config() {
-  # debug mode
+  # debug 
   CCSH_ROS_DEBUG="none"
-
-  # debug mode
   CCSH_NOCOCOSIM="false"
+  ONLY_ROS="false"
 
   # Use docker
   DOCKER="false" 
@@ -344,13 +343,17 @@ function run(){
         exit 0
         ;;
       -n|--nococosim)
-        CCSH_NOCOCOSIM=true
+        CCSH_NOCOCOSIM="true"
+        shift
+        ;;
+      -o|--onlyros)
+        ONLY_ROS="true"
         shift
         ;;
       -d|--debug)
         shift
-        CCSH_ROS_DEBUG="$1"
-        if [[ "$CCSH_ROS_DEBUG" != @(valgrind|gdb|none) ]]; then
+        DEBUG="$1"
+        if [[ "$DEBUG" != @(valgrind|gdb|none) ]]; then
           echo "ERROR: Invalid debug value, choose one from: 'none' 'valgrind' 'gdb'" >&2 
           exit 2
         fi
@@ -396,11 +399,34 @@ function run(){
 
   # export
   export CCSH_CURRENT_LOG_PATH="$CURRENT_LOG_PATH"
-  export CCSH_ROS_DEBUG
+  export CCSH_ROS_DEBUG="$DEBUG"
+  export CCSH_PATH="$SCRIPT_PATH"
   export CCSH_EXAMPLE
   export CCSH_NOCOCOSIM
 
   # run
+  if [ "$ONLY_ROS" != "true" ] ; then
+    case $DEBUG in
+      gdb)
+        gdb_cmd="gdb -ex 'set pagination off' -ex 'set logging file $FULL_CURRENT_LOG_PATH/ns3_gdb.log' -ex 'set logging overwrite on' -ex 'set logging on' -ex 'set trace-commands on' -ex 'run &> $FULL_CURRENT_LOG_PATH/ns3_out.log' -ex 'bt' --args %s --log_all" 
+        ns3_cmd="xterm -fa Monospace -fs 14 -T 'gdb - ns3'  -e ./waf --run proto-cocosim --command-template=\"$gdb_cmd\""
+        sleep_time=15
+        ;;
+      valgrind)
+        valgrind_cmd="$SCRIPT_PATH/logger $FULL_CURRENT_LOG_PATH/valgrind_out.log valgrind --log-file=$FULL_CURRENT_LOG_PATH/ns3_valgrind.log %s --log_all"
+        ns3_cmd="xterm -fa Monospace -fs 14 -T 'valgrind - ns3' -e ./waf --run proto-cocosim --command-template=\"$valgrind_cmd\""
+        sleep_time=15
+        ;;
+      *)
+        ns3_cmd="./waf --run 'proto-cocosim --log_all'"
+        sleep_time=0
+        ;;
+    esac
+  else
+    ns3_cmd="echo 'no log ns3 log here as this was run in onlyros mode'"
+    sleep_time=0
+  fi
+
   [ -f "/opt/ros/foxy/setup.$SHELL_NAME" ] && source "/opt/ros/foxy/setup.$SHELL_NAME"
   export CYCLONEDDS_URI="file://$CYCLONEDDS_CONFIG_PATH/nomulticast_v3.xml"
   export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
@@ -414,10 +440,11 @@ function run(){
     trap ' ' INT
     bash -c "\
     (\
-      (cd $NS3_SERVICE_PATH/ns-3.35 && ./waf --run 'proto-cocosim --log_all') &>$CURRENT_LOG_PATH/ns-3.log ;\
+      (cd $NS3_SERVICE_PATH/ns-3.35 && $ns3_cmd ) &>$CURRENT_LOG_PATH/ns-3.log ;\
       printf '\nns3 exited\n' \
     ) &\
     (\
+      sleep $sleep_time &&\
       source "$ROS2WS_PATH/install/setup.$SHELL_NAME" &&\
       ros2 launch $PACKAGE $LAUNCH &>$CURRENT_LOG_PATH/ros.log ;\
       echo 'ros exited'\
